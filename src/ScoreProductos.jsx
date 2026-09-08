@@ -1,7 +1,6 @@
-// src/pages/ScoreProductos.jsx
-// Página completa del analizador de productos - lista para Vercel + Vite
+// src/ScoreProductos.jsx — con historial localStorage + exportar CSV
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import "./ScoreProductos.css";
 
 const COUNTRIES = [
@@ -13,7 +12,8 @@ const COUNTRIES = [
   { code: "EC", name: "Ecuador", flag: "🇪🇨", ml: "mercadolibre.com.ec", cur: "USD" },
 ];
 
-// Llama al proxy serverless en /api/analyze (nunca expone la API key)
+const HISTORY_KEY = "dropi_historial";
+
 async function callClaude(system, user) {
   const res = await fetch("/api/analyze", {
     method: "POST",
@@ -31,7 +31,39 @@ function parseJSON(text) {
   try { return JSON.parse(m[0].replace(/```json|```/g, "").trim()); } catch { return null; }
 }
 
-// ── Componentes visuales ──────────────────────────────────────────────────────
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; }
+}
+
+function saveHistory(h) {
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(h)); } catch {}
+}
+
+function exportCSV(history) {
+  const headers = ["Fecha","Producto","País","Score","Veredicto","Vendedores ML","Anuncios FB","Precio Promedio","Demanda","Recomendación"];
+  const rows = history.map(h => [
+    h.date,
+    `"${h.name}"`,
+    h.country,
+    h.score,
+    h.verdict,
+    h.mlSellers || "",
+    h.activeAds || "",
+    h.avgPrice || "",
+    h.demandSignal || "",
+    `"${(h.recommendation || "").replace(/"/g, "'")}"`,
+  ]);
+  const csv = [headers, ...rows].map(r => r.join(",")).join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `dropi-historial-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Componentes ───────────────────────────────────────────────────────────────
 
 function ScoreRing({ value, size = 60, stroke = 5 }) {
   const r = (size - stroke) / 2;
@@ -41,7 +73,7 @@ function ScoreRing({ value, size = 60, stroke = 5 }) {
   return (
     <div className="score-ring-wrap" style={{ width: size, height: size }}>
       <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
-        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#e5e7eb" strokeWidth={stroke} />
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#1e293b" strokeWidth={stroke} />
         <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={stroke}
           strokeDasharray={circ} strokeDashoffset={circ * (1 - pct)} strokeLinecap="round"
           style={{ transition: "stroke-dashoffset 1s ease" }} />
@@ -80,20 +112,15 @@ function ProductCard({ item, rank, onRemove, onRetry, expanded, onToggle }) {
   const borderClass = item.status === "done"
     ? score >= 70 ? "card-border-success" : score >= 45 ? "card-border-warning" : "card-border-danger"
     : "";
-
   return (
     <div className={`product-card ${borderClass}`}>
-      {/* Header */}
-      <div
-        className="product-card-header"
+      <div className="product-card-header"
         style={{ cursor: item.status === "done" ? "pointer" : "default" }}
-        onClick={() => item.status === "done" && onToggle()}
-      >
+        onClick={() => item.status === "done" && onToggle()}>
         {item.status === "done" && <RankMedal rank={rank} />}
         {item.status === "analyzing" && <div className="spinner" />}
         {item.status === "pending" && <div className="rank-medal rank-other">⏳</div>}
         {item.status === "error" && <div className="rank-medal rank-other">❌</div>}
-
         <div className="product-card-info">
           <div className="product-card-name">{item.name}</div>
           <div className="product-card-sub">
@@ -105,22 +132,12 @@ function ProductCard({ item, rank, onRemove, onRetry, expanded, onToggle }) {
             )}
           </div>
         </div>
-
         {item.status === "done" && <ScoreRing value={score} />}
-
         <button className="remove-btn" aria-label="Eliminar" onClick={(e) => { e.stopPropagation(); onRemove(); }}>✕</button>
       </div>
-
-      {item.status === "done" && (
-        <div style={{ marginTop: 8 }}>
-          <VerdictBadge score={score} />
-        </div>
-      )}
-
-      {/* Expanded detail */}
+      {item.status === "done" && <div style={{ marginTop: 8 }}><VerdictBadge score={score} /></div>}
       {item.status === "done" && expanded && (
         <div className="product-card-detail">
-          {/* Sub-scores */}
           <div className="sub-scores-grid">
             {[
               { label: "Demanda", val: d.demandScore, color: "#6366f1" },
@@ -129,16 +146,11 @@ function ProductCard({ item, rank, onRemove, onRetry, expanded, onToggle }) {
               { label: "Margen", val: d.marginScore, color: "#22c55e" },
             ].map(s => (
               <div key={s.label} className="sub-score-item">
-                <div className="sub-score-row">
-                  <span>{s.label}</span>
-                  <span className="sub-score-val">{s.val}/100</span>
-                </div>
+                <div className="sub-score-row"><span>{s.label}</span><span className="sub-score-val">{s.val}/100</span></div>
                 <MiniBar value={s.val} color={s.color} />
               </div>
             ))}
           </div>
-
-          {/* Key metrics */}
           <div className="metrics-grid">
             {[
               { icon: "🏪", label: "Vendedores ML", val: d.mlSellers },
@@ -152,22 +164,84 @@ function ProductCard({ item, rank, onRemove, onRetry, expanded, onToggle }) {
               </div>
             ))}
           </div>
-
-          {/* Recommendation */}
           {d.recommendation && (
             <div className={`recommendation-box ${score >= 70 ? "rec-success" : score >= 45 ? "rec-warning" : "rec-danger"}`}>
               {score >= 70 ? "🚀" : score >= 45 ? "⚡" : "⚠️"} {d.recommendation}
             </div>
           )}
-
-          {/* Actions */}
           <div className="card-actions">
-            <button className="btn btn-secondary" onClick={(e) => { e.stopPropagation(); onRetry(); }}>
-              🔄 Volver a analizar
+            <button className="btn btn-secondary" onClick={(e) => { e.stopPropagation(); onRetry(); }}>🔄 Volver a analizar</button>
+            <button className="btn btn-danger-outline" onClick={(e) => { e.stopPropagation(); onRemove(); }}>🗑️ Quitar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Panel de historial ────────────────────────────────────────────────────────
+
+function HistoryPanel({ history, onClear, onExport }) {
+  const [open, setOpen] = useState(false);
+  if (history.length === 0) return null;
+
+  const verdictColor = (score) => score >= 70 ? "#22c55e" : score >= 45 ? "#f59e0b" : "#ef4444";
+  const verdictLabel = (score) => score >= 70 ? "Ganador" : score >= 45 ? "Moderado" : "Saturado";
+
+  return (
+    <div className="history-panel">
+      <button className="history-toggle" onClick={() => setOpen(o => !o)}>
+        📋 Historial ({history.length} consultas) {open ? "▲" : "▼"}
+      </button>
+
+      {open && (
+        <div className="history-body">
+          <div className="history-actions">
+            <button className="btn btn-secondary btn-sm" onClick={onExport}>
+              ⬇️ Exportar CSV
             </button>
-            <button className="btn btn-danger-outline" onClick={(e) => { e.stopPropagation(); onRemove(); }}>
-              🗑️ Quitar de la lista
+            <button className="btn btn-danger-outline btn-sm" onClick={onClear}>
+              🗑️ Borrar historial
             </button>
+          </div>
+
+          <div className="history-table-wrap">
+            <table className="history-table">
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Producto</th>
+                  <th>País</th>
+                  <th>Score</th>
+                  <th>Veredicto</th>
+                  <th>Vendedores</th>
+                  <th>Ads FB</th>
+                  <th>Precio</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...history].reverse().map((h, i) => (
+                  <tr key={i}>
+                    <td style={{ color: "#64748b", whiteSpace: "nowrap" }}>{h.date}</td>
+                    <td style={{ fontWeight: 500, color: "#f1f5f9" }}>{h.name}</td>
+                    <td>{h.country}</td>
+                    <td>
+                      <span style={{ fontWeight: 700, color: verdictColor(h.score) }}>{h.score}</span>
+                    </td>
+                    <td>
+                      <span style={{ padding: "2px 8px", borderRadius: 99, fontSize: 11, fontWeight: 500,
+                        background: h.score >= 70 ? "#14532d" : h.score >= 45 ? "#451a03" : "#450a0a",
+                        color: verdictColor(h.score) }}>
+                        {verdictLabel(h.score)}
+                      </span>
+                    </td>
+                    <td style={{ color: "#94a3b8" }}>{h.mlSellers || "—"}</td>
+                    <td style={{ color: "#94a3b8" }}>{h.activeAds || "—"}</td>
+                    <td style={{ color: "#94a3b8" }}>{h.avgPrice || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
@@ -183,6 +257,26 @@ export default function ScoreProductos() {
   const [items, setItems] = useState([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [expandedIdx, setExpandedIdx] = useState(null);
+  const [history, setHistory] = useState(loadHistory);
+
+  // Guardar historial cuando cambia
+  useEffect(() => { saveHistory(history); }, [history]);
+
+  const addToHistory = (name, countryName, data) => {
+    const entry = {
+      date: new Date().toLocaleDateString("es-CO", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+      name,
+      country: countryName,
+      score: data.finalScore || 0,
+      verdict: data.finalScore >= 70 ? "Ganador" : data.finalScore >= 45 ? "Moderado" : "Saturado",
+      mlSellers: data.mlSellers || "",
+      activeAds: data.activeAds || "",
+      avgPrice: data.avgPrice || "",
+      demandSignal: data.demandSignal || "",
+      recommendation: data.recommendation || "",
+    };
+    setHistory(prev => [...prev, entry]);
+  };
 
   const addProduct = () => {
     if (!input.trim() || items.length >= 8) return;
@@ -209,14 +303,11 @@ export default function ScoreProductos() {
       setItems(prev => prev.map((it, i) => i === item.idx
         ? { ...it, status: "analyzing", phase: "Buscando en Mercado Libre y FB Ads..." }
         : it));
-
       try {
         const raw = await callClaude(
           `Eres un analista experto en e-commerce y dropshipping en Latinoamérica. Busca datos REALES en la web. Responde SOLO JSON válido, sin texto extra, sin backticks, sin markdown.`,
           `Analiza el producto "${item.name}" para venta en ${country.name} (${country.ml}).
-
 Busca en ${country.ml} y en la biblioteca de anuncios de Facebook datos reales sobre este producto.
-
 Responde SOLO con este JSON:
 {
   "mlSellers": "número de vendedores",
@@ -235,12 +326,12 @@ Responde SOLO con este JSON:
   "recommendation": "2-3 frases con recomendación concreta"
 }`
         );
-
         setItems(prev => prev.map((it, i) => i === item.idx ? { ...it, phase: "Calculando score..." } : it));
         const data = parseJSON(raw);
         setItems(prev => prev.map((it, i) => i === item.idx
           ? { ...it, status: data ? "done" : "error", data: data || null }
           : it));
+        if (data) addToHistory(item.name, country.name, data);
       } catch {
         setItems(prev => prev.map((it, i) => i === item.idx ? { ...it, status: "error" } : it));
       }
@@ -264,7 +355,6 @@ Responde SOLO con este JSON:
     <div className="page-wrapper">
       <div className="page-container">
 
-        {/* Header */}
         <div className="page-header">
           <div className="page-header-icon">🏆</div>
           <div>
@@ -273,35 +363,20 @@ Responde SOLO con este JSON:
           </div>
         </div>
 
-        {/* Input row */}
         <div className="input-row">
-          <input
-            type="text"
-            className="product-input"
-            value={input}
+          <input type="text" className="product-input" value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === "Enter" && !analyzing && addProduct()}
-            placeholder="Ej: faja reductora colombiana"
-            disabled={analyzing}
-          />
-          <select
-            className="country-select"
-            value={country.code}
+            placeholder="Ej: faja reductora colombiana" disabled={analyzing} />
+          <select className="country-select" value={country.code}
             onChange={e => setCountry(COUNTRIES.find(c => c.code === e.target.value))}
-            disabled={analyzing}
-          >
+            disabled={analyzing}>
             {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.flag} {c.name}</option>)}
           </select>
-          <button
-            className="btn btn-add"
-            onClick={addProduct}
-            disabled={!input.trim() || items.length >= 8 || analyzing}
-          >
-            +
-          </button>
+          <button className="btn btn-add" onClick={addProduct}
+            disabled={!input.trim() || items.length >= 8 || analyzing}>+</button>
         </div>
 
-        {/* List controls */}
         {items.length > 0 && (
           <div className="list-controls">
             <span className="list-count">
@@ -314,14 +389,12 @@ Responde SOLO con este JSON:
           </div>
         )}
 
-        {/* Analyze button */}
         {pendingCount > 0 && !analyzing && (
           <button className="btn btn-primary btn-full" onClick={analyzeAll}>
             🔍 Analizar {pendingCount} producto{pendingCount !== 1 ? "s" : ""}
           </button>
         )}
 
-        {/* Loading state */}
         {analyzing && (
           <div className="analyzing-banner">
             <div className="spinner spinner-sm" />
@@ -329,27 +402,20 @@ Responde SOLO con este JSON:
           </div>
         )}
 
-        {/* Product cards */}
         <div className="cards-list">
           {sorted.map((item) => {
             const rank = item.status === "done"
-              ? sorted.filter(s => s.status === "done").indexOf(item) + 1
-              : null;
+              ? sorted.filter(s => s.status === "done").indexOf(item) + 1 : null;
             return (
-              <ProductCard
-                key={item.origIdx}
-                item={item}
-                rank={rank}
+              <ProductCard key={item.origIdx} item={item} rank={rank}
                 onRemove={() => removeItem(item.origIdx)}
                 onRetry={() => retryItem(item.origIdx)}
                 expanded={expandedIdx === item.origIdx}
-                onToggle={() => setExpandedIdx(expandedIdx === item.origIdx ? null : item.origIdx)}
-              />
+                onToggle={() => setExpandedIdx(expandedIdx === item.origIdx ? null : item.origIdx)} />
             );
           })}
         </div>
 
-        {/* Winner summary */}
         {doneCount >= 2 && pendingCount === 0 && !analyzing && winner && (
           <div className="winner-box">
             <div className="winner-title">🏆 Mejor oportunidad: {winner.name}</div>
@@ -361,21 +427,27 @@ Responde SOLO con este JSON:
           </div>
         )}
 
-        {/* Restart */}
         {doneCount > 0 && pendingCount === 0 && !analyzing && (
           <button className="btn btn-secondary btn-full" onClick={clearAll}>
             🔄 Nueva búsqueda desde cero
           </button>
         )}
 
-        {/* Empty state */}
         {items.length === 0 && (
           <div className="empty-state">
             <div className="empty-icon">🎯</div>
             <h3>Agrega productos para comparar</h3>
-            <p>Escribe hasta 8 productos de Dropi y descubre cuál tiene mejor oportunidad de mercado basado en datos reales de Mercado Libre y Facebook Ads</p>
+            <p>Escribe hasta 8 productos de Dropi y descubre cuál tiene mejor oportunidad de mercado</p>
           </div>
         )}
+
+        {/* Historial */}
+        <HistoryPanel
+          history={history}
+          onClear={() => { setHistory([]); saveHistory([]); }}
+          onExport={() => exportCSV(history)}
+        />
+
       </div>
     </div>
   );
