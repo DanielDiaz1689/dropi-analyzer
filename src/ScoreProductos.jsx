@@ -1,7 +1,10 @@
 // src/ScoreProductos.jsx — con historial localStorage + exportar CSV
 
 import { useState, useCallback, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { supabase, ADMIN_EMAIL } from "./lib/supabase";
 import "./ScoreProductos.css";
+import "./auth.css";
 
 const COUNTRIES = [
   { code: "CO", name: "Colombia", flag: "🇨🇴", ml: "mercadolibre.com.co", cur: "COP" },
@@ -15,9 +18,16 @@ const COUNTRIES = [
 const HISTORY_KEY = "dropi_historial";
 
 async function callClaude(system, user) {
+  // Obtener token de sesión actual para autenticar la llamada
+  const { data: { session } } = await supabase.auth.getSession()
+  const token = session?.access_token || ''
+
   const res = await fetch("/api/analyze", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`,
+    },
     body: JSON.stringify({ system, user }),
   });
   const data = await res.json();
@@ -252,12 +262,23 @@ function HistoryPanel({ history, onClear, onExport }) {
 // ── Página principal ──────────────────────────────────────────────────────────
 
 export default function ScoreProductos() {
+  const navigate = useNavigate()
   const [input, setInput] = useState("");
   const [country, setCountry] = useState(COUNTRIES[0]);
   const [items, setItems] = useState([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [expandedIdx, setExpandedIdx] = useState(null);
   const [history, setHistory] = useState(loadHistory);
+  const [userEmail, setUserEmail] = useState('');
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      const email = data?.session?.user?.email || ''
+      setUserEmail(email)
+      setIsAdmin(email === ADMIN_EMAIL)
+    })
+  }, [])
 
   // Guardar historial cuando cambia
   useEffect(() => { saveHistory(history); }, [history]);
@@ -351,9 +372,25 @@ Responde SOLO con este JSON:
   const pendingCount = items.filter(i => i.status === "pending").length;
   const winner = sorted.find(i => i.status === "done");
 
+  const cerrarSesion = async () => {
+    await supabase.auth.signOut()
+    navigate('/login')
+  }
+
   return (
     <div className="page-wrapper">
       <div className="page-container">
+
+        {/* Barra de usuario */}
+        <div className="user-bar" style={{ marginBottom: 20 }}>
+          <span className="user-bar-email">👤 {userEmail}</span>
+          <div className="user-bar-actions">
+            {isAdmin && (
+              <Link to="/admin" className="btn-admin-link">⚙️ Panel admin</Link>
+            )}
+            <button onClick={cerrarSesion} className="btn-logout">Cerrar sesión</button>
+          </div>
+        </div>
 
         <div className="page-header">
           <div className="page-header-icon">🏆</div>
